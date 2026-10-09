@@ -42,7 +42,7 @@ function renderMap(data){
  for(const id of ids){const ll=coordinates[id];if(!Array.isArray(ll)||ll.length!==2||!ll.every(Number.isFinite))continue;
  const s=stores[id];positions.push(ll);
  const url='https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(s[0]+' '+s[2]);
- L.circleMarker(ll,{radius:7,color:'#ffffff',weight:2,fillColor:'#e95899',fillOpacity:.9}).bindPopup(`<strong>${escapeHtml(s[0])}</strong><br>${escapeHtml(s[2])}<br><a href="${escapeHtml(url)}" target="_blank" rel="noopener">在 Google Maps 開啟 ↗</a>`).addTo(mapLayer);
+ L.marker(ll,{icon:L.divIcon({className:'aikatsu-map-icon',html:'<img src="aikatsuencore_logo.png" alt="偶活店家">',iconSize:[64,51],iconAnchor:[32,26],popupAnchor:[0,-20]})}).bindPopup(`<strong>${escapeHtml(s[0])}</strong><br>${escapeHtml(s[2])}<br><a href="${escapeHtml(url)}" target="_blank" rel="noopener">在 Google Maps 開啟 ↗</a>`).addTo(mapLayer);
  }
  mapBounds=positions.length?L.latLngBounds(positions):null;
  $('mapStatus').textContent=positions.length?`顯示 ${positions.length.toLocaleString()} 間店家位置`+(positions.length<data.length?` · ${data.length-positions.length} 間尚無座標，請從下方列表開啟 Google Maps`:''):(data.length?'這些店家尚無座標，請從下方列表開啟 Google Maps':'沒有符合篩選的店家');
