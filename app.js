@@ -20,7 +20,7 @@ function syncRegionScope(){
  $('searchScope').textContent=region?`⌑ 搜尋範圍已鎖定：${region}地區（選「全日本」解除）`:'';
 }
 function filtered(){const q=normalize($('search').value),pref=$('pref').value;let data=stores.filter(s=>(!region||regionLookup[s[1]]===region)&&(!pref||s[1]===pref)&&(!q||normalize(s[0]+s[1]+s[2]).includes(q))&&(!onlyFav||favorites.has(key(s))));if($('sort').value==='name')data.sort((a,b)=>a[0].localeCompare(b[0],'ja'));return data}
-function render(){const data=filtered(),pages=Math.max(1,Math.ceil(data.length/pageSize));page=Math.min(page,pages);$('total').textContent=data.length.toLocaleString();$('filterNote').textContent=[region,$('pref').value,onlyFav?'我的收藏':''].filter(Boolean).join(' · ');$('onlyFav').classList.toggle('active',onlyFav);$('onlyFav').setAttribute('aria-pressed',onlyFav);$('navFav').setAttribute('aria-pressed',onlyFav);
+function render(){const data=filtered();renderMap(data);const pages=Math.max(1,Math.ceil(data.length/pageSize));page=Math.min(page,pages);$('total').textContent=data.length.toLocaleString();$('filterNote').textContent=[region,$('pref').value,onlyFav?'我的收藏':''].filter(Boolean).join(' · ');$('onlyFav').classList.toggle('active',onlyFav);$('onlyFav').setAttribute('aria-pressed',onlyFav);$('navFav').setAttribute('aria-pressed',onlyFav);
  $('results').innerHTML=data.slice((page-1)*pageSize,page*pageSize).map(s=>{const id=stores.indexOf(s),saved=favorites.has(key(s)),url='https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(s[0]+' '+s[2]);return `<article class="card"><div class="card-top"><span class="pref-tag">${escapeHtml(s[1])} · ${regionLookup[s[1]]}</span><button class="fav ${saved?'is-saved':''}" data-fav="${id}" aria-label="${saved?'取消收藏':'收藏'} ${escapeHtml(s[0])}" aria-pressed="${saved}">${saved?'♥':'♡'}</button></div><h3>${escapeHtml(s[0])}</h3><p class="address">${escapeHtml(s[2])}</p><a class="phone" href="tel:${s[3]}">TEL ${s[3]}</a><div class="card-actions"><a class="map-link" href="${escapeHtml(url)}" target="_blank" rel="noopener">Google Maps 導航 ↗</a><button class="copy" data-copy="${id}">複製地址</button></div></article>`}).join('')||`<div class="empty"><span class="empty-symbol">✧</span><strong>${onlyFav&&favorites.size===0?'你的舞台手帳還是空白的':'還沒找到這個舞台'}</strong><p>${onlyFav&&favorites.size===0?'按下店家旁的 ♡，把想去的店收藏起來吧。':'試試其他關鍵字，或重設地區篩選。'}</p></div>`;
  $('pagination').innerHTML=data.length?`<button id="prev" ${page===1?'disabled':''}>← 上一頁</button><span>${page} / ${pages}</span><button id="next" ${page===pages?'disabled':''}>下一頁 →</button>`:'';if($('prev'))$('prev').onclick=()=>changePage(-1);if($('next'))$('next').onclick=()=>changePage(1);
  const params=new URLSearchParams();if($('search').value)params.set('q',$('search').value);if($('pref').value)params.set('pref',$('pref').value);if(region)params.set('region',region);try{history.replaceState(null,'',location.pathname+(params.size?'?'+params:'')+location.hash)}catch{}
@@ -32,4 +32,28 @@ $('regions').onclick=e=>{const b=e.target.closest('button');if(!b)return;region=
 function toggleOnly(){onlyFav=!onlyFav;page=1;render()}$('onlyFav').onclick=toggleOnly;$('navFav').onclick=()=>{toggleOnly();$('finder').scrollIntoView({behavior:'smooth'})};
 $('results').onclick=async e=>{const fav=e.target.closest('[data-fav]'),copy=e.target.closest('[data-copy]');if(fav){const s=stores[Number(fav.dataset.fav)],k=key(s);if(favorites.has(k))favorites.delete(k);else favorites.add(k);updateFavorites();render()}if(copy){const s=stores[Number(copy.dataset.copy)];try{await navigator.clipboard.writeText(s[2]);toast('地址已複製 ♡')}catch{toast('無法複製，請長按店家地址選取。')}}};
 document.addEventListener('keydown',e=>{if(e.key==='/'&&!['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)){e.preventDefault();$('search').focus()}});
-async function init(){try{const response=await fetch('stores.json');if(!response.ok)throw Error('data');stores=await response.json();const prefs=[...new Set(stores.map(s=>s[1]))];$('pref').innerHTML='<option value="">全部都道府縣</option>'+prefs.map(p=>`<option>${p}</option>`).join('');const params=new URLSearchParams(location.search);$('search').value=params.get('q')||'';if(prefs.includes(params.get('pref')))$('pref').value=params.get('pref');if(regionDefs.some(([r])=>r===params.get('region')))region=params.get('region');$('favCount').textContent=favorites.size;syncRegionScope();renderRegions();render()}catch{$('total').textContent='—';$('results').innerHTML='<div class="empty"><strong>店家資料暫時載入失敗</strong><p>請重新整理頁面，或先查看下方官方清單。</p><button onclick="location.reload()">重新載入</button></div>'}}init();
+let storeMap=null,mapLayer=null,coordinates={},mapSignature='',mapBounds=null;
+function fitMap(){if(storeMap&&mapBounds)storeMap.fitBounds(mapBounds,{padding:[30,30],maxZoom:15});}
+function renderMap(data){
+ if(!storeMap)return;
+ const ids=data.map(s=>stores.indexOf(s)),signature=ids.slice().sort((a,b)=>a-b).join(',');
+ if(signature===mapSignature)return;mapSignature=signature;mapLayer.clearLayers();
+ const positions=[];
+ for(const id of ids){const ll=coordinates[id];if(!Array.isArray(ll)||ll.length!==2||!ll.every(Number.isFinite))continue;
+ const s=stores[id];positions.push(ll);
+ const url='https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(s[0]+' '+s[2]);
+ L.circleMarker(ll,{radius:7,color:'#ffffff',weight:2,fillColor:'#e95899',fillOpacity:.9}).bindPopup(`<strong>${escapeHtml(s[0])}</strong><br>${escapeHtml(s[2])}<br><a href="${escapeHtml(url)}" target="_blank" rel="noopener">在 Google Maps 開啟 ↗</a>`).addTo(mapLayer);
+ }
+ mapBounds=positions.length?L.latLngBounds(positions):null;
+ $('mapStatus').textContent=positions.length?`顯示 ${positions.length.toLocaleString()} 間店家位置`+(positions.length<data.length?` · ${data.length-positions.length} 間尚無座標，請從下方列表開啟 Google Maps`:''):(data.length?'這些店家尚無座標，請從下方列表開啟 Google Maps':'沒有符合篩選的店家');
+ $('mapFit').disabled=!mapBounds;fitMap();
+}
+async function initMap(){
+ try{if(!window.L)throw new Error('Map unavailable');
+ const response=await fetch('coordinates.json');if(!response.ok)throw new Error('Coordinates unavailable');coordinates=await response.json();
+ storeMap=L.map('storeMap',{preferCanvas:true,scrollWheelZoom:false}).setView([37,138],5);
+ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(storeMap);
+ mapLayer=L.layerGroup().addTo(storeMap);mapSignature='initial';$('mapFit').addEventListener('click',fitMap);renderMap(filtered());
+ }catch{ $('mapStatus').textContent='地圖暫時無法載入，仍可使用店家列表和 Google Maps 連結。';$('mapFit').disabled=true; }
+}
+async function init(){try{const response=await fetch('stores.json');if(!response.ok)throw Error('data');stores=await response.json();const prefs=[...new Set(stores.map(s=>s[1]))];$('pref').innerHTML='<option value="">全部都道府縣</option>'+prefs.map(p=>`<option>${p}</option>`).join('');const params=new URLSearchParams(location.search);$('search').value=params.get('q')||'';if(prefs.includes(params.get('pref')))$('pref').value=params.get('pref');if(regionDefs.some(([r])=>r===params.get('region')))region=params.get('region');$('favCount').textContent=favorites.size;syncRegionScope();renderRegions();render();initMap()}catch{$('total').textContent='—';$('results').innerHTML='<div class="empty"><strong>店家資料暫時載入失敗</strong><p>請重新整理頁面，或先查看下方官方清單。</p><button onclick="location.reload()">重新載入</button></div>'}}init();
